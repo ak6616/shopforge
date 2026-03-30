@@ -65,10 +65,9 @@ async function handleStripeEvent(event: Stripe.Event) {
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await prisma.$transaction(async (tx: any) => {
-        const order = await tx.order.update({
+        await tx.order.update({
           where: { id: orderId },
           data: { status: "PAID" },
-          include: { items: true },
         });
 
         await tx.payment.create({
@@ -92,13 +91,7 @@ async function handleStripeEvent(event: Stripe.Event) {
           },
         });
 
-        // Decrement stock
-        for (const item of order.items) {
-          await tx.productVariant.update({
-            where: { id: item.variantId },
-            data: { stockQuantity: { decrement: item.quantity } },
-          });
-        }
+        // Stock was already decremented at order creation time (checkout/intent)
       });
       break;
     }
@@ -107,18 +100,30 @@ async function handleStripeEvent(event: Stripe.Event) {
       const pi = event.data.object as Stripe.PaymentIntent;
       const orderId = pi.metadata.orderId;
 
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { status: "PAYMENT_FAILED" },
-      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await prisma.$transaction(async (tx: any) => {
+        const order = await tx.order.update({
+          where: { id: orderId },
+          data: { status: "PAYMENT_FAILED" },
+          include: { items: true },
+        });
 
-      await prisma.orderEvent.create({
-        data: {
-          orderId,
-          type: "PAYMENT_FAILED",
-          description: pi.last_payment_error?.message || "Payment failed",
-          source: "stripe",
-        },
+        // Restore stock that was reserved at order creation
+        for (const item of order.items) {
+          await tx.productVariant.update({
+            where: { id: item.variantId },
+            data: { stockQuantity: { increment: item.quantity } },
+          });
+        }
+
+        await tx.orderEvent.create({
+          data: {
+            orderId,
+            type: "PAYMENT_FAILED",
+            description: pi.last_payment_error?.message || "Payment failed",
+            source: "stripe",
+          },
+        });
       });
       break;
     }

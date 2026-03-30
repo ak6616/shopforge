@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { generateOrderNumber } from "@/lib/orders";
@@ -27,6 +28,14 @@ const IntentSchema = z.object({
   shippingMethod: z.string().default("standard"),
 });
 
+class InsufficientStockError extends Error {
+  sku: string;
+  constructor(sku: string) {
+    super(`Insufficient stock for SKU ${sku}`);
+    this.sku = sku;
+  }
+}
+
 const SHIPPING_AMOUNTS: Record<string, number> = {
   standard: 0,
   express: 999,
@@ -38,7 +47,7 @@ export async function POST(req: NextRequest) {
     const authPayload = authenticateRequest(req);
     const body = IntentSchema.parse(await req.json());
 
-    // Resolve variants and validate stock
+    // Resolve variants (read-only check that all IDs are valid)
     const variantIds = body.cartItems.map((i) => i.variantId);
     const variants = await prisma.productVariant.findMany({
       where: { id: { in: variantIds } },
@@ -51,26 +60,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const variantMap = new Map(variants.map((v) => [v.id, v]));
-
-    for (const item of body.cartItems) {
-      const variant = variantMap.get(item.variantId)!;
-      if (variant.stockQuantity < item.quantity) {
-        return NextResponse.json(
-          { error: `Insufficient stock for SKU ${variant.sku}` },
-          { status: 409 }
-        );
-      }
-    }
-
-    const subtotal = body.cartItems.reduce((sum, item) => {
-      const variant = variantMap.get(item.variantId)!;
-      return sum + variant.priceAmount * item.quantity;
-    }, 0);
-
     const shippingAmount = SHIPPING_AMOUNTS[body.shippingMethod] ?? 0;
     const taxAmount = 0;
-    const totalAmount = subtotal + shippingAmount + taxAmount;
 
     // Fetch the authenticated user
     const user = await prisma.user.findUnique({ where: { id: authPayload.userId } });
@@ -78,57 +69,100 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Create address record
-    const address = await prisma.address.create({
-      data: {
-        userId: user.id,
-        line1: body.shippingAddress.address1,
-        line2: body.shippingAddress.address2 ?? null,
-        city: body.shippingAddress.city,
-        state: body.shippingAddress.state,
-        postalCode: body.shippingAddress.postalCode,
-        country: body.shippingAddress.country,
-      },
-    });
+    const ipAddress = req.headers.get("x-forwarded-for") ?? undefined;
 
-    const order = await prisma.order.create({
-      data: {
-        orderNumber: await generateOrderNumber(),
-        userId: user.id,
-        addressId: address.id,
-        status: "PENDING",
-        currency: "PLN",
-        subtotalAmount: subtotal,
-        shippingAmount,
-        taxAmount,
-        totalAmount,
-        ipAddress: req.headers.get("x-forwarded-for") ?? undefined,
-        items: {
-          create: body.cartItems.map((item) => {
-            const variant = variantMap.get(item.variantId)!;
-            return {
-              variantId: item.variantId,
-              productName: variant.name,
-              variantName: variant.name,
-              sku: variant.sku,
-              quantity: item.quantity,
-              unitPrice: variant.priceAmount,
-              totalPrice: variant.priceAmount * item.quantity,
-            };
-          }),
+    // Atomic transaction: lock variant rows, validate stock, decrement, and create order
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const order = await prisma.$transaction(async (tx: any) => {
+      // Lock variant rows with SELECT ... FOR UPDATE to prevent concurrent oversell
+      const lockedVariants = await tx.$queryRaw`
+        SELECT id, sku, name, "priceAmount", "stockQuantity"
+        FROM "ProductVariant"
+        WHERE id IN (${Prisma.join(variantIds)})
+        FOR UPDATE
+      `;
+
+      const variantMap = new Map(
+        (lockedVariants as Array<{ id: string; sku: string; name: string; priceAmount: number; stockQuantity: number }>)
+          .map((v) => [v.id, v])
+      );
+
+      // Validate stock under lock
+      for (const item of body.cartItems) {
+        const variant = variantMap.get(item.variantId)!;
+        if (variant.stockQuantity < item.quantity) {
+          throw new InsufficientStockError(variant.sku);
+        }
+      }
+
+      // Decrement stock atomically
+      for (const item of body.cartItems) {
+        await tx.productVariant.update({
+          where: { id: item.variantId },
+          data: { stockQuantity: { decrement: item.quantity } },
+        });
+      }
+
+      const subtotal = body.cartItems.reduce((sum, item) => {
+        const variant = variantMap.get(item.variantId)!;
+        return sum + variant.priceAmount * item.quantity;
+      }, 0);
+      const totalAmount = subtotal + shippingAmount + taxAmount;
+
+      // Create address record
+      const address = await tx.address.create({
+        data: {
+          userId: user.id,
+          line1: body.shippingAddress.address1,
+          line2: body.shippingAddress.address2 ?? null,
+          city: body.shippingAddress.city,
+          state: body.shippingAddress.state,
+          postalCode: body.shippingAddress.postalCode,
+          country: body.shippingAddress.country,
         },
-        events: {
-          create: {
-            type: "CREATED",
-            description: "Order created from checkout",
-            source: "system",
+      });
+
+      const newOrder = await tx.order.create({
+        data: {
+          orderNumber: await generateOrderNumber(),
+          userId: user.id,
+          addressId: address.id,
+          status: "PENDING",
+          currency: "PLN",
+          subtotalAmount: subtotal,
+          shippingAmount,
+          taxAmount,
+          totalAmount,
+          ipAddress,
+          items: {
+            create: body.cartItems.map((item) => {
+              const variant = variantMap.get(item.variantId)!;
+              return {
+                variantId: item.variantId,
+                productName: variant.name,
+                variantName: variant.name,
+                sku: variant.sku,
+                quantity: item.quantity,
+                unitPrice: variant.priceAmount,
+                totalPrice: variant.priceAmount * item.quantity,
+              };
+            }),
+          },
+          events: {
+            create: {
+              type: "CREATED",
+              description: "Order created from checkout",
+              source: "system",
+            },
           },
         },
-      },
+      });
+
+      return newOrder;
     });
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: totalAmount,
+      amount: order.totalAmount,
       currency: "pln",
       metadata: {
         orderId: order.id,
@@ -161,6 +195,12 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
+    }
+    if (err instanceof InsufficientStockError) {
+      return NextResponse.json(
+        { error: err.message },
+        { status: 409 }
+      );
     }
     if (err instanceof z.ZodError) {
       return NextResponse.json(

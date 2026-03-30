@@ -12,7 +12,7 @@ export async function GET() {
       orderBy: { sortOrder: "asc" },
     });
 
-    return NextResponse.json({ categories });
+    return NextResponse.json(categories);
   } catch (err) {
     console.error("Categories list error:", err);
     return NextResponse.json(

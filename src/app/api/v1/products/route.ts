@@ -41,13 +41,11 @@ export async function GET(req: NextRequest) {
     ]);
 
     return NextResponse.json({
-      products,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+      data: products,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
     });
   } catch (err) {
     console.error("Products list error:", err);

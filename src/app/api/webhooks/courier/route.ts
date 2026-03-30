@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { OrderStatus } from "@/generated/prisma/enums";
+import { OrderEventType } from "@/generated/prisma/enums";
 import { normalizeCourierEvent, CourierEventType } from "@/lib/courier/adapter";
 import crypto from "crypto";
 
@@ -49,18 +51,24 @@ export async function POST(req: NextRequest) {
   const newStatus = mapCourierEventToOrderStatus(event.type);
   const eventType = mapCourierEventToOrderEventType(event.type);
 
+  const orderStatusValues = Object.values(OrderStatus) as string[];
+  const orderEventTypeValues = Object.values(OrderEventType) as string[];
+
+  const resolvedStatus = newStatus && orderStatusValues.includes(newStatus) ? newStatus as OrderStatus : order.status;
+  const resolvedEventType = orderEventTypeValues.includes(eventType) ? eventType as OrderEventType : "TRACKING_UPDATED" as const;
+
   await prisma.$transaction([
     prisma.order.update({
       where: { id: order.id },
       data: {
-        status: (newStatus || order.status) as "PENDING",
+        status: resolvedStatus,
         trackingUrl: event.trackingUrl || order.trackingUrl,
       },
     }),
     prisma.orderEvent.create({
       data: {
         orderId: order.id,
-        type: eventType as "TRACKING_UPDATED",
+        type: resolvedEventType,
         description: event.description,
         metadata: { provider, rawEvent: payload },
         source: "courier",

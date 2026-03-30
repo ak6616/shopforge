@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, AuthError } from "@/lib/auth";
 
@@ -25,21 +26,18 @@ export async function GET(req: NextRequest) {
         truncExpr = "day";
     }
 
-    const data = await prisma.$queryRawUnsafe<
+    const data = await prisma.$queryRaw<
       Array<{ period: Date; revenue: bigint; order_count: bigint }>
     >(
-      `SELECT date_trunc($1, "createdAt") as period,
+      Prisma.sql`SELECT date_trunc(${truncExpr}, "createdAt") as period,
               SUM("totalAmount") as revenue,
               COUNT(*) as order_count
        FROM "Order"
-       WHERE "createdAt" >= $2
-         AND "createdAt" <= $3
+       WHERE "createdAt" >= ${from}
+         AND "createdAt" <= ${to}
          AND "status" IN ('PAID', 'DELIVERED', 'SHIPPED', 'FULFILLMENT_PENDING')
        GROUP BY period
-       ORDER BY period ASC`,
-      truncExpr,
-      from,
-      to
+       ORDER BY period ASC`
     );
 
     return NextResponse.json({

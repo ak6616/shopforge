@@ -7,10 +7,10 @@ import { useState } from "react";
 
 const NAV_ITEMS = [
   { href: "/admin/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "#", label: "Orders", icon: ShoppingCart },
-  { href: "#", label: "Products", icon: Package },
-  { href: "#", label: "Customers", icon: Users },
-  { href: "#", label: "Settings", icon: Settings },
+  { href: "/admin/orders", label: "Orders", icon: ShoppingCart },
+  { href: "/admin/products", label: "Products", icon: Package },
+  { href: "/admin/customers", label: "Customers", icon: Users },
+  { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {

@@ -64,7 +64,6 @@ export default function CheckoutPage() {
     setIntentError(null);
     try {
       const result = await createCheckoutIntent({
-        email: address.email,
         cartItems: items.map((item) => ({ variantId: item.variantId, quantity: item.quantity })),
         shippingAddress: {
           firstName: address.firstName,

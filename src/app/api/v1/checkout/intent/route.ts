@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { generateOrderNumber } from "@/lib/orders";
+import { authenticateRequest, AuthError } from "@/lib/auth";
 
 const AddressSchema = z.object({
   firstName: z.string().min(1),
@@ -21,7 +22,6 @@ const CartItemSchema = z.object({
 });
 
 const IntentSchema = z.object({
-  email: z.string().email(),
   cartItems: z.array(CartItemSchema).min(1),
   shippingAddress: AddressSchema,
   shippingMethod: z.string().default("standard"),
@@ -35,6 +35,7 @@ const SHIPPING_AMOUNTS: Record<string, number> = {
 
 export async function POST(req: NextRequest) {
   try {
+    const authPayload = authenticateRequest(req);
     const body = IntentSchema.parse(await req.json());
 
     // Resolve variants and validate stock
@@ -71,17 +72,10 @@ export async function POST(req: NextRequest) {
     const taxAmount = 0;
     const totalAmount = subtotal + shippingAmount + taxAmount;
 
-    // Find or create a guest user record for this email
-    let user = await prisma.user.findUnique({ where: { email: body.email } });
+    // Fetch the authenticated user
+    const user = await prisma.user.findUnique({ where: { id: authPayload.userId } });
     if (!user) {
-      user = await prisma.user.create({
-        data: {
-          email: body.email,
-          firstName: body.shippingAddress.firstName,
-          lastName: body.shippingAddress.lastName,
-          role: "CUSTOMER",
-        },
-      });
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
     // Create address record
@@ -165,6 +159,9 @@ export async function POST(req: NextRequest) {
       orderNumber: order.orderNumber,
     });
   } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: 401 });
+    }
     if (err instanceof z.ZodError) {
       return NextResponse.json(
         { error: "Validation failed", details: err.issues },

@@ -94,7 +94,8 @@ export interface User {
 
 export interface AuthResponse {
   user: User;
-  token?: string;
+  accessToken: string;
+  refreshToken: string;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -105,12 +106,21 @@ async function request<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string>),
+  };
+
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('accessToken');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers,
     ...options,
   });
 
@@ -218,7 +228,6 @@ export interface CheckoutCartItem {
 }
 
 export interface CreateCheckoutIntentParams {
-  email: string;
   cartItems: CheckoutCartItem[];
   shippingAddress: ShippingAddress;
   shippingMethod: string;

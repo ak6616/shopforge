@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin, AuthError } from "@/lib/auth";
+import { requireAdmin, requireSuperAdmin, AuthError } from "@/lib/auth";
 
 const CreateProductSchema = z.object({
   name: z.string().min(1),
@@ -45,7 +45,7 @@ const CreateProductSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    requireAdmin(req);
+    requireSuperAdmin(req);
     const body = CreateProductSchema.parse(await req.json());
 
     const product = await prisma.product.create({

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { requireAdmin, AuthError } from "@/lib/auth";
+import { Prisma } from "@/generated/prisma/client";
+import { requireAdmin, requireSuperAdmin, AuthError } from "@/lib/auth";
 
 const UpdateProductSchema = z.object({
   name: z.string().min(1).optional(),
@@ -55,7 +56,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    requireAdmin(req);
+    requireSuperAdmin(req);
     const { id } = await params;
     const body = UpdateProductSchema.parse(await req.json());
 
@@ -80,6 +81,9 @@ export async function PATCH(
         { status: 400 }
       );
     }
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    }
     console.error("Admin product update error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
@@ -93,7 +97,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    requireAdmin(req);
+    requireSuperAdmin(req);
     const { id } = await params;
 
     await prisma.product.update({
@@ -105,6 +109,9 @@ export async function DELETE(
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
+    }
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
     }
     console.error("Admin product delete error:", err);
     return NextResponse.json(

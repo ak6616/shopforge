@@ -25,6 +25,7 @@ function ProductsContent() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const page = Number(searchParams.get("page") || "1");
@@ -49,6 +50,7 @@ function ProductsContent() {
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     Promise.all([
       getProducts({ page, sort, category, search, minPrice: minPrice ? Number(minPrice) : undefined, maxPrice: maxPrice ? Number(maxPrice) : undefined, limit: 12 }),
       getCategories(),
@@ -57,7 +59,10 @@ function ProductsContent() {
       setTotalPages(prodData.totalPages);
       setCategories(cats);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => {
+      setError("Failed to load products. Please try again later.");
+      setLoading(false);
+    });
   }, [page, sort, category, search, minPrice, maxPrice]);
 
   const handleAddToCart = (product: Product) => {
@@ -120,7 +125,12 @@ function ProductsContent() {
             </select>
           </div>
 
-          {loading ? (
+          {error ? (
+            <div className="text-center py-16">
+              <p className="text-destructive font-medium">{error}</p>
+              <button onClick={() => window.location.reload()} className="text-sm text-accent hover:underline mt-2 inline-block">Retry</button>
+            </div>
+          ) : loading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
               {Array.from({ length: 8 }).map((_, i) => (
                 <div key={i} className="rounded-lg border bg-card animate-pulse">

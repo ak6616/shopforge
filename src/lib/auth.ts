@@ -54,6 +54,14 @@ export function requireAdmin(req: NextRequest): JwtPayload {
   return payload;
 }
 
+export function requireSuperAdmin(req: NextRequest): JwtPayload {
+  const payload = authenticateRequest(req);
+  if (payload.role !== "SUPER_ADMIN") {
+    throw new AuthError("Super admin access required");
+  }
+  return payload;
+}
+
 export class AuthError extends Error {
   constructor(message: string) {
     super(message);

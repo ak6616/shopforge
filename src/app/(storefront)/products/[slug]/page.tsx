@@ -165,7 +165,7 @@ export default function ProductDetailPage() {
               <div className="flex items-center border rounded-md w-fit">
                 <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="p-2 hover:bg-muted"><Minus className="h-4 w-4" /></button>
                 <span className="px-4 py-2 text-sm font-medium min-w-[48px] text-center tabular-nums">{quantity}</span>
-                <button onClick={() => setQuantity(quantity + 1)} className="p-2 hover:bg-muted"><Plus className="h-4 w-4" /></button>
+                <button onClick={() => setQuantity(stockCount != null ? Math.min(quantity + 1, stockCount) : quantity + 1)} disabled={stockCount != null && quantity >= stockCount} className="p-2 hover:bg-muted disabled:opacity-50"><Plus className="h-4 w-4" /></button>
               </div>
             </div>
 

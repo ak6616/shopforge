@@ -35,6 +35,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Validate addressId belongs to the cart's user
+    const address = await prisma.address.findUnique({
+      where: { id: body.addressId },
+    });
+
+    if (!address || address.userId !== cart.userId) {
+      return NextResponse.json(
+        { error: "Address not found or does not belong to this user" },
+        { status: 403 }
+      );
+    }
+
     const subtotal = cart.items.reduce(
       (sum: number, item: { unitPrice: number; quantity: number }) =>
         sum + item.unitPrice * item.quantity,

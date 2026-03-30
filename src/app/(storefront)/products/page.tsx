@@ -70,6 +70,7 @@ function ProductsContent() {
     addItem({
       productId: product.id,
       variantId: variant?.id || product.id,
+      slug: product.slug,
       name: product.name,
       variant: variant?.name || "Default",
       price: variant?.price || product.price,

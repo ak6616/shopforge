@@ -44,7 +44,7 @@ export default function CartPage() {
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <Link href={`/products/${item.productId}`} className="font-medium text-sm hover:text-accent line-clamp-1">{item.name}</Link>
+                <Link href={`/products/${item.slug}`} className="font-medium text-sm hover:text-accent line-clamp-1">{item.name}</Link>
                 <p className="text-sm text-muted-foreground mt-0.5">{item.variant}</p>
                 <p className="font-semibold mt-1 tabular-nums">${item.price.toFixed(2)}</p>
                 <div className="flex items-center justify-between mt-3">

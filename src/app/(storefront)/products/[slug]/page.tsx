@@ -75,6 +75,7 @@ export default function ProductDetailPage() {
     addItem({
       productId: product.id,
       variantId: selectedVariant?.id || product.id,
+      slug: product.slug,
       name: product.name,
       variant: [selectedColor, selectedSize].filter(Boolean).join(" / ") || "Default",
       price: currentPrice,

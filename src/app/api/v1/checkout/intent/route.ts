@@ -4,85 +4,129 @@ import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { generateOrderNumber } from "@/lib/orders";
 
-const IntentSchema = z.object({
-  cartToken: z.string(),
-  addressId: z.string(),
+const AddressSchema = z.object({
+  firstName: z.string().min(1),
+  lastName: z.string().min(1),
+  address1: z.string().min(1),
+  address2: z.string().optional(),
+  city: z.string().min(1),
+  state: z.string().min(1),
+  postalCode: z.string().min(1),
+  country: z.string().min(2).max(2),
 });
+
+const CartItemSchema = z.object({
+  variantId: z.string(),
+  quantity: z.number().int().min(1),
+});
+
+const IntentSchema = z.object({
+  email: z.string().email(),
+  cartItems: z.array(CartItemSchema).min(1),
+  shippingAddress: AddressSchema,
+  shippingMethod: z.string().default("standard"),
+});
+
+const SHIPPING_AMOUNTS: Record<string, number> = {
+  standard: 0,
+  express: 999,
+  overnight: 2499,
+};
 
 export async function POST(req: NextRequest) {
   try {
     const body = IntentSchema.parse(await req.json());
 
-    const cart = await prisma.cart.findUnique({
-      where: { token: body.cartToken },
-      include: { items: { include: { variant: true } } },
+    // Resolve variants and validate stock
+    const variantIds = body.cartItems.map((i) => i.variantId);
+    const variants = await prisma.productVariant.findMany({
+      where: { id: { in: variantIds } },
     });
 
-    if (!cart || cart.items.length === 0) {
+    if (variants.length !== variantIds.length) {
       return NextResponse.json(
-        { error: "Cart is empty or not found" },
+        { error: "One or more cart items reference invalid variants" },
         { status: 400 }
       );
     }
 
-    // Validate stock
-    for (const item of cart.items) {
-      if (item.variant.stockQuantity < item.quantity) {
+    const variantMap = new Map(variants.map((v) => [v.id, v]));
+
+    for (const item of body.cartItems) {
+      const variant = variantMap.get(item.variantId)!;
+      if (variant.stockQuantity < item.quantity) {
         return NextResponse.json(
-          { error: `Insufficient stock for SKU ${item.variant.sku}` },
+          { error: `Insufficient stock for SKU ${variant.sku}` },
           { status: 409 }
         );
       }
     }
 
-    // Validate addressId belongs to the cart's user
-    const address = await prisma.address.findUnique({
-      where: { id: body.addressId },
-    });
+    const subtotal = body.cartItems.reduce((sum, item) => {
+      const variant = variantMap.get(item.variantId)!;
+      return sum + variant.priceAmount * item.quantity;
+    }, 0);
 
-    if (!address || address.userId !== cart.userId) {
-      return NextResponse.json(
-        { error: "Address not found or does not belong to this user" },
-        { status: 403 }
-      );
-    }
-
-    const subtotal = cart.items.reduce(
-      (sum: number, item: { unitPrice: number; quantity: number }) =>
-        sum + item.unitPrice * item.quantity,
-      0
-    );
-    const shippingAmount = 0; // Free shipping for now
+    const shippingAmount = SHIPPING_AMOUNTS[body.shippingMethod] ?? 0;
     const taxAmount = 0;
     const totalAmount = subtotal + shippingAmount + taxAmount;
+
+    // Find or create a guest user record for this email
+    let user = await prisma.user.findUnique({ where: { email: body.email } });
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          email: body.email,
+          firstName: body.shippingAddress.firstName,
+          lastName: body.shippingAddress.lastName,
+          role: "CUSTOMER",
+        },
+      });
+    }
+
+    // Create address record
+    const address = await prisma.address.create({
+      data: {
+        userId: user.id,
+        line1: body.shippingAddress.address1,
+        line2: body.shippingAddress.address2 ?? null,
+        city: body.shippingAddress.city,
+        state: body.shippingAddress.state,
+        postalCode: body.shippingAddress.postalCode,
+        country: body.shippingAddress.country,
+      },
+    });
 
     const order = await prisma.order.create({
       data: {
         orderNumber: await generateOrderNumber(),
-        userId: cart.userId,
-        addressId: body.addressId,
+        userId: user.id,
+        addressId: address.id,
         status: "PENDING",
-        currency: cart.currency,
+        currency: "PLN",
         subtotalAmount: subtotal,
         shippingAmount,
         taxAmount,
         totalAmount,
-        ipAddress: req.headers.get("x-forwarded-for") || undefined,
+        ipAddress: req.headers.get("x-forwarded-for") ?? undefined,
         items: {
-          create: cart.items.map((item: { variantId: string; variant: { name: string; sku: string }; quantity: number; unitPrice: number }) => ({
-            variantId: item.variantId,
-            productName: item.variant.name,
-            variantName: item.variant.name,
-            sku: item.variant.sku,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            totalPrice: item.unitPrice * item.quantity,
-          })),
+          create: body.cartItems.map((item) => {
+            const variant = variantMap.get(item.variantId)!;
+            return {
+              variantId: item.variantId,
+              productName: variant.name,
+              variantName: variant.name,
+              sku: variant.sku,
+              quantity: item.quantity,
+              unitPrice: variant.priceAmount,
+              totalPrice: variant.priceAmount * item.quantity,
+            };
+          }),
         },
         events: {
           create: {
             type: "CREATED",
-            description: "Order created from cart",
+            description: "Order created from checkout",
             source: "system",
           },
         },
@@ -91,11 +135,10 @@ export async function POST(req: NextRequest) {
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: totalAmount,
-      currency: cart.currency.toLowerCase(),
+      currency: "pln",
       metadata: {
         orderId: order.id,
         orderNumber: order.orderNumber,
-        cartToken: body.cartToken,
       },
     });
 

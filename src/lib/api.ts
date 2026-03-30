@@ -71,9 +71,9 @@ export interface ShippingAddress {
 }
 
 export interface CheckoutIntent {
-  id: string;
-  total: number;
-  status: string;
+  clientSecret: string;
+  orderId: string;
+  orderNumber: string;
 }
 
 export interface Order {
@@ -212,10 +212,16 @@ export async function removeCartItem(
 
 // ─── Checkout ────────────────────────────────────────────────────────────────
 
+export interface CheckoutCartItem {
+  variantId: string;
+  quantity: number;
+}
+
 export interface CreateCheckoutIntentParams {
+  email: string;
+  cartItems: CheckoutCartItem[];
   shippingAddress: ShippingAddress;
   shippingMethod: string;
-  email: string;
 }
 
 export async function createCheckoutIntent(

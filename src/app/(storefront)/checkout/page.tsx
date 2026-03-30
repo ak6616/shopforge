@@ -4,8 +4,12 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Check, ChevronRight, Lock } from "lucide-react";
+import { loadStripe } from "@stripe/stripe-js";
+import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { useCartStore } from "@/store/cart";
 import { createCheckoutIntent } from "@/lib/api";
+
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
 
 type Step = 1 | 2 | 3;
 
@@ -32,10 +36,8 @@ export default function CheckoutPage() {
   const router = useRouter();
   const items = useCartStore((s) => s.items);
   const getTotal = useCartStore((s) => s.getTotal);
-  const clearCart = useCartStore((s) => s.clearCart);
 
   const [step, setStep] = useState<Step>(1);
-  const [submitting, setSubmitting] = useState(false);
   const [orderConfirmed, setOrderConfirmed] = useState(false);
   const [orderId, setOrderId] = useState("");
 
@@ -45,6 +47,9 @@ export default function CheckoutPage() {
   });
 
   const [shippingMethod, setShippingMethod] = useState("standard");
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [intentLoading, setIntentLoading] = useState(false);
+  const [intentError, setIntentError] = useState<string | null>(null);
 
   const selectedShipping = SHIPPING_METHODS.find((m) => m.id === shippingMethod)!;
   const subtotal = getTotal();
@@ -53,22 +58,33 @@ export default function CheckoutPage() {
   const total = subtotal + shipping + tax;
 
   const handleContactSubmit = (e: React.FormEvent) => { e.preventDefault(); setStep(2); };
-  const handleShippingSubmit = (e: React.FormEvent) => { e.preventDefault(); setStep(3); };
-
-  const handlePayment = async (e: React.FormEvent) => {
+  const handleShippingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
+    setIntentLoading(true);
+    setIntentError(null);
     try {
-      const result = await createCheckoutIntent({ email: address.email, shippingAddress: address, shippingMethod });
-      setOrderId(result?.id || `SF-${Date.now()}`);
-      setOrderConfirmed(true);
-      clearCart();
-    } catch {
-      setOrderId(`SF-${Date.now()}`);
-      setOrderConfirmed(true);
-      clearCart();
+      const result = await createCheckoutIntent({
+        email: address.email,
+        cartItems: items.map((item) => ({ variantId: item.variantId, quantity: item.quantity })),
+        shippingAddress: {
+          firstName: address.firstName,
+          lastName: address.lastName,
+          address1: address.address1,
+          address2: address.address2 || undefined,
+          city: address.city,
+          state: address.state,
+          postalCode: address.postalCode,
+          country: address.country,
+        },
+        shippingMethod,
+      });
+      setClientSecret(result.clientSecret);
+      setOrderId(result.orderNumber);
+      setStep(3);
+    } catch (err) {
+      setIntentError(err instanceof Error ? err.message : "Failed to initialize payment. Please try again.");
     } finally {
-      setSubmitting(false);
+      setIntentLoading(false);
     }
   };
 
@@ -158,31 +174,28 @@ export default function CheckoutPage() {
                   </label>
                 ))}
               </div>
+              {intentError && (
+                <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                  {intentError}
+                </div>
+              )}
               <div className="flex justify-between">
                 <button type="button" onClick={() => setStep(1)} className="h-10 rounded-lg border px-6 text-sm font-medium hover:bg-muted">Back</button>
-                <button type="submit" className="flex h-10 items-center gap-2 rounded-lg bg-primary text-primary-foreground px-6 font-medium shadow hover:bg-primary/90">Continue to Payment <ChevronRight className="h-4 w-4" /></button>
+                <button type="submit" disabled={intentLoading} className="flex h-10 items-center gap-2 rounded-lg bg-primary text-primary-foreground px-6 font-medium shadow hover:bg-primary/90 disabled:opacity-50">
+                  {intentLoading ? "Preparing payment..." : <>{`Continue to Payment`} <ChevronRight className="h-4 w-4" /></>}
+                </button>
               </div>
             </form>
           )}
 
-          {step === 3 && (
-            <form onSubmit={handlePayment} className="space-y-6">
-              <h2 className="text-lg font-semibold mb-4">Payment</h2>
-              <div className="rounded-lg border p-4 space-y-3">
-                <InputField label="Card Number" placeholder="4242 4242 4242 4242" required value="" onChange={() => {}} />
-                <div className="grid grid-cols-2 gap-3">
-                  <InputField label="Expiry" placeholder="MM/YY" required value="" onChange={() => {}} />
-                  <InputField label="CVC" placeholder="123" required value="" onChange={() => {}} />
-                </div>
-                <p className="text-xs text-muted-foreground flex items-center gap-1"><Lock className="h-3 w-3" /> Secured by Stripe (test mode)</p>
-              </div>
-              <div className="flex justify-between">
-                <button type="button" onClick={() => setStep(2)} className="h-10 rounded-lg border px-6 text-sm font-medium hover:bg-muted">Back</button>
-                <button type="submit" disabled={submitting} className="flex h-12 items-center gap-2 rounded-lg bg-primary text-primary-foreground px-8 font-semibold shadow hover:bg-primary/90 disabled:opacity-50">
-                  {submitting ? "Processing..." : `Place Order $${total.toFixed(2)}`}
-                </button>
-              </div>
-            </form>
+          {step === 3 && clientSecret && (
+            <Elements stripe={stripePromise} options={{ clientSecret }}>
+              <PaymentForm
+                total={total}
+                onBack={() => setStep(2)}
+                onSuccess={() => setOrderConfirmed(true)}
+              />
+            </Elements>
           )}
         </div>
 
@@ -207,6 +220,63 @@ export default function CheckoutPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function PaymentForm({ total, onBack, onSuccess }: {
+  total: number;
+  onBack: () => void;
+  onSuccess: () => void;
+}) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [submitting, setSubmitting] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const clearCart = useCartStore((s) => s.clearCart);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+
+    setSubmitting(true);
+    setPaymentError(null);
+
+    const { error } = await stripe.confirmPayment({
+      elements,
+      redirect: "if_required",
+    });
+
+    if (error) {
+      setPaymentError(error.message ?? "Payment failed. Please try again.");
+      setSubmitting(false);
+      return;
+    }
+
+    clearCart();
+    onSuccess();
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <h2 className="text-lg font-semibold mb-4">Payment</h2>
+      <div className="rounded-lg border p-4 space-y-4">
+        <PaymentElement />
+        <p className="text-xs text-muted-foreground flex items-center gap-1">
+          <Lock className="h-3 w-3" /> Secured by Stripe
+        </p>
+      </div>
+      {paymentError && (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {paymentError}
+        </div>
+      )}
+      <div className="flex justify-between">
+        <button type="button" onClick={onBack} className="h-10 rounded-lg border px-6 text-sm font-medium hover:bg-muted">Back</button>
+        <button type="submit" disabled={submitting || !stripe} className="flex h-12 items-center gap-2 rounded-lg bg-primary text-primary-foreground px-8 font-semibold shadow hover:bg-primary/90 disabled:opacity-50">
+          {submitting ? "Processing..." : `Place Order $${total.toFixed(2)}`}
+        </button>
+      </div>
+    </form>
   );
 }
 

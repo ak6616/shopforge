@@ -339,6 +339,44 @@ enum PaymentStatus {
 }
 
 // ─────────────────────────────────────────────
+// DISCOUNT CODES
+// ─────────────────────────────────────────────
+
+model DiscountCode {
+  id             String    @id @default(cuid())
+  code           String    @unique
+  description    String?
+  discountType   String    @default("percentage") // "percentage" or "fixed"
+  discountValue  Int       // percentage (0-100) or fixed amount in grosz
+  minOrderAmount Int?
+  maxUses        Int?
+  usedCount      Int       @default(0)
+  active         Boolean   @default(true)
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([code])
+  @@index([active])
+}
+
+// ─────────────────────────────────────────────
+// SALES REPORTS
+// ─────────────────────────────────────────────
+
+model SalesReport {
+  id              String   @id @default(cuid())
+  month           DateTime
+  totalRevenue    Int      // in grosz
+  orderCount      Int
+  averageOrderVal Int
+  topProducts     Json     // array of { productName, unitsSold, revenue }
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  @@unique([month])
+}
+
+// ─────────────────────────────────────────────
 // WEBHOOK AUDIT LOG
 // ─────────────────────────────────────────────
 
